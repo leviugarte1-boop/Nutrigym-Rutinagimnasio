@@ -1,0 +1,7 @@
+{
+  "name": "Nutrigym",
+  "description": "An AI-powered nutrition and fitness assistant to help you achieve your health goals. Log meals with your camera, get personalized meal plans, and track your progress.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
