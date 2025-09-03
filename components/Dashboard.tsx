@@ -175,6 +175,13 @@ const Calendar: React.FC<{ selectedDate: Date; onDateChange: (date: Date) => voi
 const GoalsCard: React.FC<{ profile: UserProfile, onUpdate: (data: Partial<UserProfile>) => void }> = ({ profile, onUpdate }) => {
     const [isEditing, setIsEditing] = useState(false);
     const [goals, setGoals] = useState({ ...profile });
+    
+    const macroLabels = {
+        calorieGoal: 'Kcal',
+        proteinGoal: 'Prot',
+        carbGoal: 'Carb',
+        fatGoal: 'Gras'
+    };
 
     useEffect(() => setGoals({ ...profile }), [profile]);
 
@@ -234,7 +241,7 @@ const GoalsCard: React.FC<{ profile: UserProfile, onUpdate: (data: Partial<UserP
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 {(['calorieGoal', 'proteinGoal', 'carbGoal', 'fatGoal'] as const).map(key => (
                      <div key={key}>
-                        <label className="text-xs text-text-secondary">{key.replace('Goal', '')}</label>
+                        <label className="text-xs text-text-secondary">{macroLabels[key]}</label>
                         {isEditing ? 
                             <input type="number" value={goals[key]} onChange={e => setGoals(g => ({...g, [key]: parseInt(e.target.value) || 0}))} className={inputStyle}/> : 
                             <p className="font-bold text-lg">{goals[key]}{key !== 'calorieGoal' && 'g'}</p>
@@ -336,7 +343,23 @@ const MealLoggerSection: React.FC<{ addFoodToLog: DashboardProps['addFoodToLog']
         }));
     };
 
+    const handleAddManualItemToAnalysis = () => {
+        const newItem: EditableFoodItem = {
+            id: `${Date.now()}-manual-${Math.random()}`,
+            name: '', calories: 0, protein: 0, carbs: 0, fat: 0, grams: 0,
+        };
+        setAnalysisResult(prev => [...prev, newItem]);
+    };
+
     const inputStyle = "w-full text-sm p-1 border-2 bg-white border-gray-200 rounded-md font-sans focus:border-primary focus:ring-primary";
+    
+    const macroLabelsAnalysis = {
+        grams: 'Gramos',
+        calories: 'Kcal',
+        protein: 'Prot',
+        carbs: 'Carb',
+        fat: 'Gras'
+    };
 
     return (
       <>
@@ -391,7 +414,7 @@ const MealLoggerSection: React.FC<{ addFoodToLog: DashboardProps['addFoodToLog']
                 <div className="grid grid-cols-5 gap-2 text-center">
                     {(['grams', 'calories', 'protein', 'carbs', 'fat'] as const).map(field => (
                         <div key={field}>
-                            <label className="text-xs text-text-secondary capitalize">{field === 'grams' ? 'Gramos' : field === 'calories' ? 'Cal' : field.substring(0,4)}</label>
+                            <label className="text-xs text-text-secondary capitalize">{macroLabelsAnalysis[field]}</label>
                              <input type="number" value={item[field] ? (field === 'protein' || field === 'fat' ? item[field] : Math.round(item[field]!)) : ''} onChange={e => {
                                 if (field === 'grams') {
                                     handleGramsChange(item.id, parseFloat(e.target.value) || 0);
@@ -404,6 +427,9 @@ const MealLoggerSection: React.FC<{ addFoodToLog: DashboardProps['addFoodToLog']
                 </div>
               </div>
             ))}
+            <Button onClick={handleAddManualItemToAnalysis} variant="outline" className="w-full mt-2 text-sm py-2">
+                + Añadir otro alimento
+            </Button>
           </div>
         )}
 
@@ -500,16 +526,25 @@ const EditFoodModal: React.FC<{
 
 
 const MacroProgressBar: React.FC<{label: string, consumed: number, goal: number, color: string}> = ({label, consumed, goal, color}) => {
-    const percentage = goal > 0 ? Math.min((consumed / goal) * 100, 100) : 0;
-    const remaining = Math.max(0, goal - consumed);
+    const percentage = goal > 0 ? (consumed / goal) * 100 : 0;
+    const displayPercentage = Math.min(percentage, 100);
+    const remaining = goal - consumed;
+    const isOver = remaining < 0;
+    const barColor = isOver ? 'bg-danger' : color;
+
     return (
         <div>
             <div className="flex justify-between text-xs mb-1">
                 <span className="font-medium text-text-primary">{label}</span>
-                <span className="text-text-secondary">{Math.round(remaining)}g restantes</span>
+                <span className={isOver ? "text-danger font-medium" : "text-text-secondary"}>
+                    {isOver
+                        ? `${Math.round(remaining)}g excedidos`
+                        : `${Math.round(remaining)}g restantes`
+                    }
+                </span>
             </div>
             <div className="w-full bg-gray-200 rounded-full h-2">
-                <div className={`${color} h-2 rounded-full`} style={{ width: `${percentage}%` }}></div>
+                <div className={`${barColor} h-2 rounded-full`} style={{ width: `${displayPercentage}%` }}></div>
             </div>
         </div>
     );

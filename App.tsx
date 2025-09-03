@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { DailyLog, UserProfile, StoredFoodItem, Meal } from './types';
 import Dashboard from './components/Dashboard';
 
@@ -7,15 +7,56 @@ const getLogDateString = (date: Date) => date.toISOString().split('T')[0];
 const App: React.FC = () => {
   const [selectedDate, setSelectedDate] = useState(new Date());
 
-  const [userProfile, setUserProfile] = useState<UserProfile>({
-    name: "Alex",
-    calorieGoal: 2000,
-    proteinGoal: 150,
-    carbGoal: 200,
-    fatGoal: 60,
+  const [userProfile, setUserProfile] = useState<UserProfile>(() => {
+    try {
+      const savedProfile = localStorage.getItem('nutrigym_userProfile');
+      if (savedProfile) {
+        const parsed = JSON.parse(savedProfile);
+        if (parsed.goal && parsed.age) return parsed;
+      }
+    } catch (error) {
+      console.error("Error al cargar el perfil desde localStorage", error);
+    }
+    return {
+      name: "Alex",
+      calorieGoal: 0,
+      proteinGoal: 0,
+      carbGoal: 0,
+      fatGoal: 0,
+    };
   });
 
-  const [logsByDate, setLogsByDate] = useState<{ [key: string]: DailyLog }>({});
+  const [logsByDate, setLogsByDate] = useState<{ [key: string]: DailyLog }>(() => {
+    try {
+      const savedLogs = localStorage.getItem('nutrigym_logsByDate');
+      if (savedLogs) {
+        const parsedLogs = JSON.parse(savedLogs);
+        Object.keys(parsedLogs).forEach(dateString => {
+          parsedLogs[dateString].date = new Date(parsedLogs[dateString].date);
+        });
+        return parsedLogs;
+      }
+    } catch (error) {
+      console.error("Error al cargar los registros desde localStorage", error);
+    }
+    return {};
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('nutrigym_userProfile', JSON.stringify(userProfile));
+    } catch (error) {
+      console.error("Error al guardar el perfil en localStorage", error);
+    }
+  }, [userProfile]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('nutrigym_logsByDate', JSON.stringify(logsByDate));
+    } catch (error) {
+      console.error("Error al guardar los registros en localStorage", error);
+    }
+  }, [logsByDate]);
   
   const currentLog = logsByDate[getLogDateString(selectedDate)] || {
     date: selectedDate,
