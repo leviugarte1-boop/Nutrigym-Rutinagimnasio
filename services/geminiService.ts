@@ -1,13 +1,7 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import type { FoodItem } from '../types';
 
-const API_KEY = process.env.API_KEY;
-
-if (!API_KEY) {
-  throw new Error("API_KEY environment variable not set");
-}
-
-const ai = new GoogleGenAI({ apiKey: API_KEY });
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 const fileToGenerativePart = (file: File) => {
   return new Promise<{ inlineData: { data: string, mimeType: string } }>((resolve, reject) => {
