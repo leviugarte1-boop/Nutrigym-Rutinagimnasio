@@ -1,7 +1,19 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import type { FoodItem } from '../types';
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Use a singleton pattern to lazy-initialize the AI client.
+// This prevents the app from crashing on load if the API key is not yet available
+// or not properly injected by the build environment.
+let ai: GoogleGenAI | null = null;
+
+const getAiClient = (): GoogleGenAI => {
+    if (!ai) {
+        // The constructor will throw an error if apiKey is missing or invalid.
+        // This is handled by the calling function's try/catch block.
+        ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    }
+    return ai;
+};
 
 const fileToGenerativePart = (file: File) => {
   return new Promise<{ inlineData: { data: string, mimeType: string } }>((resolve, reject) => {
@@ -40,8 +52,9 @@ const foodItemSchema = {
 export const analyzeFoodImage = async (imageFile: File): Promise<Omit<FoodItem, 'id'>[]> => {
     try {
         const imagePart = await fileToGenerativePart(imageFile);
+        const generativeAi = getAiClient();
         
-        const response = await ai.models.generateContent({
+        const response = await generativeAi.models.generateContent({
             model: 'gemini-2.5-flash',
             contents: {
                 parts: [
@@ -65,13 +78,17 @@ export const analyzeFoodImage = async (imageFile: File): Promise<Omit<FoodItem, 
 
     } catch (error) {
         console.error("Error analyzing food image:", error);
-        throw new Error("Failed to analyze image with AI. Please try again.");
+        if (error instanceof Error && (error.message.includes('API key') || error.message.includes('API_KEY') || error.message.includes('permission'))) {
+             throw new Error("La clave de API no es válida o no está configurada. Verifica la configuración en Netlify.");
+        }
+        throw new Error("No se pudo analizar la imagen con la IA. Inténtalo de nuevo.");
     }
 };
 
 export const generateMealPlan = async (prompt: string): Promise<string> => {
     try {
-        const response = await ai.models.generateContent({
+        const generativeAi = getAiClient();
+        const response = await generativeAi.models.generateContent({
             model: 'gemini-2.5-flash',
             contents: prompt,
             config: {
@@ -81,6 +98,9 @@ export const generateMealPlan = async (prompt: string): Promise<string> => {
         return response.text;
     } catch (error) {
         console.error("Error generating meal plan:", error);
-        throw new Error("Failed to generate meal plan with AI. Please try again.");
+        if (error instanceof Error && (error.message.includes('API key') || error.message.includes('API_KEY') || error.message.includes('permission'))) {
+             throw new Error("La clave de API no es válida o no está configurada. Verifica la configuración en Netlify.");
+        }
+        throw new Error("No se pudo generar el plan de comidas con la IA. Inténtalo de nuevo.");
     }
 };
