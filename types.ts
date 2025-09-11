@@ -36,3 +36,8 @@ export interface UserProfile {
   carbGoal: number;
   fatGoal: number;
 }
+
+export interface AnalyzedDish {
+    dishName: string;
+    ingredients: Omit<FoodItem, 'id'>[];
+}

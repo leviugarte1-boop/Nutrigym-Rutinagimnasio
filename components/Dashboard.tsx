@@ -1,10 +1,29 @@
 import React, { useState, useEffect, useRef, ChangeEvent } from 'react';
-import type { UserProfile, DailyLog, FoodItem, Meal, StoredFoodItem } from '../types';
-import { analyzeFoodImage, generateMealPlan } from '../services/geminiService';
+import type { UserProfile, DailyLog, FoodItem, Meal, StoredFoodItem, AnalyzedDish } from '../types';
+import { analyzeFoodImage, generateMealPlan, analyzeFoodDescription } from '../services/geminiService';
 import { Card } from './common/Card';
 import { Icon } from './common/Icon';
 import { Button } from './common/Button';
 import { Spinner } from './common/Spinner';
+
+// Fix: Add type declarations for the Web Speech API (SpeechRecognition) to resolve TypeScript errors.
+// This API is not part of standard DOM typings and needs to be declared to be used with TypeScript.
+interface SpeechRecognition extends EventTarget {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  start(): void;
+  stop(): void;
+  onresult: (event: any) => void;
+  onerror: (event: any) => void;
+}
+
+declare global {
+  interface Window {
+    SpeechRecognition: { new (): SpeechRecognition };
+    webkitSpeechRecognition: { new (): SpeechRecognition };
+  }
+}
 
 // --- PROPS ---
 interface DashboardProps {
@@ -254,15 +273,26 @@ const GoalsCard: React.FC<{ profile: UserProfile, onUpdate: (data: Partial<UserP
     );
 };
 
-interface EditableFoodItem extends FoodItem {
-    original?: FoodItem;
+interface EditableFoodItem extends Omit<FoodItem, 'id'> {
+    id: string;
+    original?: Omit<FoodItem, 'id'>;
 }
 
+interface EditableDish extends Omit<AnalyzedDish, 'ingredients'> {
+    id: string;
+    ingredients: EditableFoodItem[];
+}
+
+
 const MealLoggerSection: React.FC<{ addFoodToLog: DashboardProps['addFoodToLog'] }> = ({ addFoodToLog }) => {
-    const [mode, setMode] = useState<'camera' | 'manual'>('camera');
+    const [mode, setMode] = useState<'camera' | 'describe' | 'manual'>('camera');
     const [imagePreview, setImagePreview] = useState<string | null>(null);
     const [imageFile, setImageFile] = useState<File | null>(null);
-    const [analysisResult, setAnalysisResult] = useState<EditableFoodItem[]>([]);
+    const [description, setDescription] = useState('');
+    const [isListening, setIsListening] = useState(false);
+    const recognitionRef = useRef<SpeechRecognition | null>(null);
+
+    const [analysisResult, setAnalysisResult] = useState<EditableDish[]>([]);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [selectedMeal, setSelectedMeal] = useState<keyof Meal>('lunch');
@@ -270,8 +300,38 @@ const MealLoggerSection: React.FC<{ addFoodToLog: DashboardProps['addFoodToLog']
     
     const [manualFood, setManualFood] = useState({ name: '', calories: '', protein: '', carbs: '', fat: '', grams: '' });
 
+    useEffect(() => {
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (SpeechRecognition) {
+            recognitionRef.current = new SpeechRecognition();
+            recognitionRef.current.continuous = true;
+            recognitionRef.current.interimResults = true;
+            recognitionRef.current.lang = 'es-ES';
+
+            recognitionRef.current.onresult = (event) => {
+                let interimTranscript = '';
+                let finalTranscript = '';
+                for (let i = event.resultIndex; i < event.results.length; ++i) {
+                    if (event.results[i].isFinal) {
+                        finalTranscript += event.results[i][0].transcript;
+                    } else {
+                        interimTranscript += event.results[i][0].transcript;
+                    }
+                }
+                setDescription(prev => prev + finalTranscript);
+            };
+            
+            recognitionRef.current.onerror = (event) => {
+                console.error("Speech recognition error", event.error);
+                setError(`Error de reconocimiento: ${event.error}`);
+                setIsListening(false);
+            };
+        }
+    }, []);
+
     const resetState = () => {
-        setImagePreview(null); setImageFile(null); setAnalysisResult([]); setManualFood({ name: '', calories: '', protein: '', carbs: '', fat: '', grams: ''});
+        setImagePreview(null); setImageFile(null); setAnalysisResult([]); setDescription('');
+        setManualFood({ name: '', calories: '', protein: '', carbs: '', fat: '', grams: ''});
     };
 
     const handleImageChange = (e: ChangeEvent<HTMLInputElement>) => {
@@ -285,22 +345,57 @@ const MealLoggerSection: React.FC<{ addFoodToLog: DashboardProps['addFoodToLog']
         }
     };
 
-    const handleAnalyzeClick = async () => {
-        if (!imageFile) return;
+    const handleAnalyze = async (analysisFn: () => Promise<AnalyzedDish[]>) => {
         setIsLoading(true); setError(null);
         try {
-            const result = await analyzeFoodImage(imageFile);
-            setAnalysisResult(result.map((item, i) => ({ ...item, id: `${Date.now()}-${i}`, original: { ...item, id: '' } })));
+            const result = await analysisFn();
+            const editableResult: EditableDish[] = result.map((dish, dishIndex) => ({
+                ...dish,
+                id: `${Date.now()}-dish-${dishIndex}`,
+                ingredients: dish.ingredients.map((ing, ingIndex) => ({
+                    ...ing,
+                    id: `${Date.now()}-ing-${dishIndex}-${ingIndex}`,
+                    original: { ...ing }
+                }))
+            }));
+            setAnalysisResult(editableResult);
         } catch (err) {
             setError(err instanceof Error ? err.message : "Ocurrió un error desconocido.");
         } finally {
             setIsLoading(false);
         }
     };
+    
+    const handleAnalyzeImageClick = () => {
+        if (!imageFile) return;
+        handleAnalyze(() => analyzeFoodImage(imageFile));
+    };
+
+    const handleAnalyzeDescriptionClick = () => {
+        if (!description.trim()) return;
+        handleAnalyze(() => analyzeFoodDescription(description));
+    };
+
+    const handleToggleListening = () => {
+        if (!recognitionRef.current) {
+            setError("El reconocimiento de voz no es compatible con este navegador.");
+            return;
+        }
+        if (isListening) {
+            recognitionRef.current.stop();
+            setIsListening(false);
+        } else {
+            setDescription(''); // Clear previous text
+            recognitionRef.current.start();
+            setIsListening(true);
+        }
+    };
   
     const handleAddItems = () => {
         if (analysisResult.length > 0) {
-            addFoodToLog(selectedMeal, analysisResult.map(({ id, original, ...rest }) => rest));
+            const allItems = analysisResult.flatMap(dish => dish.ingredients);
+            const itemsToLog = allItems.map(({ id, original, ...rest }) => rest);
+            addFoodToLog(selectedMeal, itemsToLog);
             resetState();
         }
     };
@@ -324,31 +419,54 @@ const MealLoggerSection: React.FC<{ addFoodToLog: DashboardProps['addFoodToLog']
     }
     
     const handleManualChange = (e: ChangeEvent<HTMLInputElement>) => setManualFood(p => ({...p, [e.target.name]: e.target.value}));
+    
+    const handleIngredientChange = (dishId: string, ingId: string, field: keyof FoodItem, value: string | number) => {
+       setAnalysisResult(prev => prev.map(dish => {
+           if (dish.id !== dishId) return dish;
+           return {
+               ...dish,
+               ingredients: dish.ingredients.map(ing => {
+                   if (ing.id !== ingId) return ing;
+                   return {...ing, [field]: value };
+               })
+           }
+       }));
+    };
 
-    const handleGramsChange = (itemId: string, newGrams: number) => {
-        setAnalysisResult(prev => prev.map(item => {
-            if (item.id === itemId && item.original?.grams && item.original.grams > 0) {
-                const original = item.original;
-                const ratio = newGrams / original.grams;
-                return {
-                    ...item,
-                    grams: newGrams,
-                    calories: Math.round(original.calories * ratio),
-                    protein: Math.round((original.protein * ratio) * 10) / 10,
-                    carbs: Math.round(original.carbs * ratio),
-                    fat: Math.round((original.fat * ratio) * 10) / 10,
-                };
+    const handleGramsChange = (dishId: string, ingId: string, newGrams: number) => {
+        setAnalysisResult(prev => prev.map(dish => {
+            if (dish.id !== dishId) return dish;
+            return {
+                ...dish,
+                ingredients: dish.ingredients.map(ing => {
+                    if (ing.id === ingId && ing.original?.grams && ing.original.grams > 0) {
+                        const original = ing.original;
+                        const ratio = newGrams / original.grams;
+                        return {
+                            ...ing,
+                            grams: newGrams,
+                            calories: Math.round(original.calories * ratio),
+                            protein: Math.round((original.protein * ratio) * 10) / 10,
+                            carbs: Math.round(original.carbs * ratio),
+                            fat: Math.round((original.fat * ratio) * 10) / 10,
+                        };
+                    }
+                    return ing;
+                })
             }
-            return item;
         }));
     };
 
     const handleAddManualItemToAnalysis = () => {
-        const newItem: EditableFoodItem = {
-            id: `${Date.now()}-manual-${Math.random()}`,
-            name: '', calories: 0, protein: 0, carbs: 0, fat: 0, grams: 0,
+        const newDish: EditableDish = {
+            id: `${Date.now()}-manual-dish`,
+            dishName: 'Alimento Manual',
+            ingredients: [{
+                id: `${Date.now()}-manual-ing`,
+                name: '', calories: 0, protein: 0, carbs: 0, fat: 0, grams: 0,
+            }]
         };
-        setAnalysisResult(prev => [...prev, newItem]);
+        setAnalysisResult(prev => [...prev, newDish]);
     };
 
     const inputStyle = "w-full text-sm p-1 border-2 bg-white border-gray-200 rounded-md font-sans focus:border-primary focus:ring-primary";
@@ -360,13 +478,29 @@ const MealLoggerSection: React.FC<{ addFoodToLog: DashboardProps['addFoodToLog']
         carbs: 'Carb',
         fat: 'Gras'
     };
+    
+    const sumMacros = (ingredients: EditableFoodItem[]) => {
+        return ingredients.reduce((acc, item) => ({
+            calories: acc.calories + (item.calories || 0),
+            protein: acc.protein + (item.protein || 0),
+            carbs: acc.carbs + (item.carbs || 0),
+            fat: acc.fat + (item.fat || 0),
+        }), { calories: 0, protein: 0, carbs: 0, fat: 0 });
+    };
+
+    const loggerModes = [
+        { id: 'camera', label: 'Con Foto', icon: 'camera' },
+        { id: 'describe', label: 'Describir', icon: 'mic' },
+        { id: 'manual', label: 'Manualmente', icon: 'edit' },
+    ] as const;
 
     return (
       <>
         <div className="flex justify-center border-b-2 border-gray-200 mb-4">
-            {(['camera', 'manual'] as const).map(m => (
-                <button key={m} onClick={() => setMode(m)} className={`px-4 py-2 text-sm font-medium transition-colors ${mode === m ? 'border-b-2 border-primary text-primary' : 'text-text-secondary hover:text-primary'}`}>
-                    {m === 'camera' ? 'Con Foto' : 'Manualmente'}
+            {loggerModes.map(m => (
+                <button key={m.id} onClick={() => setMode(m.id)} className={`flex-1 sm:flex-initial sm:px-4 py-2 text-sm font-medium transition-colors flex items-center justify-center gap-2 ${mode === m.id ? 'border-b-2 border-primary text-primary' : 'text-text-secondary hover:text-primary'}`}>
+                    <Icon name={m.icon} className="w-5 h-5" />
+                    <span className="hidden sm:inline">{m.label}</span>
                 </button>
             ))}
         </div>
@@ -385,7 +519,23 @@ const MealLoggerSection: React.FC<{ addFoodToLog: DashboardProps['addFoodToLog']
                         <span className="font-semibold">Toca para subir una foto</span>
                     </button>
                 )}
-                {imageFile && <Button onClick={handleAnalyzeClick} disabled={isLoading} className="w-full">{isLoading ? <Spinner /> : "Analizar Comida"}</Button>}
+                {imageFile && <Button onClick={handleAnalyzeImageClick} disabled={isLoading} className="w-full">{isLoading ? <Spinner /> : "Analizar Comida"}</Button>}
+            </div>
+        )}
+        
+        {mode === 'describe' && (
+             <div className="space-y-4">
+                <textarea 
+                    rows={4} 
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    placeholder="Describe tu comida aquí o usa el botón de abajo para dictar por voz..."
+                    className="w-full p-2 border-2 border-gray-300 rounded-lg font-sans"
+                />
+                <Button onClick={handleToggleListening} variant={isListening ? 'secondary' : 'primary'} className={`w-full ${isListening ? 'bg-danger hover:bg-red-700' : ''}`}>
+                    {isListening ? 'Detener Grabación' : 'Grabar Voz'}
+                </Button>
+                {description && <Button onClick={handleAnalyzeDescriptionClick} disabled={isLoading} className="w-full">{isLoading ? <Spinner /> : "Analizar Descripción"}</Button>}
             </div>
         )}
 
@@ -408,25 +558,45 @@ const MealLoggerSection: React.FC<{ addFoodToLog: DashboardProps['addFoodToLog']
         {analysisResult.length > 0 && (
           <div className="mt-4">
             <h4 className="font-semibold mb-2">Resultados (Editable)</h4>
-            {analysisResult.map(item => (
-              <div key={item.id} className="p-2 border rounded-md mb-2 bg-gray-50">
-                <input type="text" value={item.name} onChange={e => setAnalysisResult(p => p.map(i => i.id === item.id ? {...i, name: e.target.value} : i))} className={`${inputStyle} font-bold mb-2`} />
-                <div className="grid grid-cols-5 gap-2 text-center">
-                    {(['grams', 'calories', 'protein', 'carbs', 'fat'] as const).map(field => (
-                        <div key={field}>
-                            <label className="text-xs text-text-secondary capitalize">{macroLabelsAnalysis[field]}</label>
-                             <input type="number" value={item[field] ? (field === 'protein' || field === 'fat' ? item[field] : Math.round(item[field]!)) : ''} onChange={e => {
-                                if (field === 'grams') {
-                                    handleGramsChange(item.id, parseFloat(e.target.value) || 0);
-                                } else {
-                                    setAnalysisResult(p => p.map(i => i.id === item.id ? {...i, [field]: parseFloat(e.target.value) || 0} : i))
-                                }
-                             }} className={inputStyle} />
+            {analysisResult.map(dish => {
+              const totals = sumMacros(dish.ingredients);
+              return (
+              <details key={dish.id} className="p-2 border rounded-md mb-2 bg-gray-50 open:shadow-lg open:bg-white transition-all" open>
+                <summary className="cursor-pointer font-bold flex justify-between items-center">
+                    <input type="text" value={dish.dishName} 
+                        onClick={e => e.stopPropagation()} 
+                        onChange={e => setAnalysisResult(p => p.map(d => d.id === dish.id ? {...d, dishName: e.target.value} : d))} 
+                        className={`${inputStyle} font-bold w-2/3`} />
+                    <div className="text-right text-xs">
+                        <span className="font-bold text-primary">{Math.round(totals.calories)} kcal</span><br/>
+                        <span className="text-text-secondary">
+                            P:{Math.round(totals.protein)} C:{Math.round(totals.carbs)} G:{Math.round(totals.fat)}
+                        </span>
+                    </div>
+                </summary>
+                <div className="mt-2 space-y-2 pt-2 border-t">
+                    {dish.ingredients.map(ing => (
+                         <div key={ing.id} className="p-2 border rounded-md bg-gray-50/50">
+                            <input type="text" value={ing.name} onChange={e => handleIngredientChange(dish.id, ing.id, 'name', e.target.value)} className={`${inputStyle} font-semibold mb-2`} />
+                            <div className="grid grid-cols-5 gap-2 text-center">
+                                {(['grams', 'calories', 'protein', 'carbs', 'fat'] as const).map(field => (
+                                    <div key={field}>
+                                        <label className="text-xs text-text-secondary capitalize">{macroLabelsAnalysis[field]}</label>
+                                         <input type="number" value={ing[field] ? (field === 'protein' || field === 'fat' ? ing[field] : Math.round(ing[field]!)) : ''} onChange={e => {
+                                            if (field === 'grams') {
+                                                handleGramsChange(dish.id, ing.id, parseFloat(e.target.value) || 0);
+                                            } else {
+                                                handleIngredientChange(dish.id, ing.id, field, parseFloat(e.target.value) || 0);
+                                            }
+                                         }} className={inputStyle} />
+                                    </div>
+                                ))}
+                            </div>
                         </div>
                     ))}
                 </div>
-              </div>
-            ))}
+              </details>
+            )})}
             <Button onClick={handleAddManualItemToAnalysis} variant="outline" className="w-full mt-2 text-sm py-2">
                 + Añadir otro alimento
             </Button>
@@ -440,7 +610,7 @@ const MealLoggerSection: React.FC<{ addFoodToLog: DashboardProps['addFoodToLog']
                     <option value="breakfast">Desayuno</option><option value="lunch">Almuerzo</option>
                     <option value="dinner">Cena</option><option value="snacks">Snacks</option>
                  </select>
-                 {mode === 'camera' && <Button onClick={handleAddItems} className="w-full mt-2">Añadir a mi registro</Button>}
+                 {(mode === 'camera' || mode === 'describe') && <Button onClick={handleAddItems} className="w-full mt-2">Añadir a mi registro</Button>}
             </div>
         )}
       </>

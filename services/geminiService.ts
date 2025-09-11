@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import type { FoodItem } from '../types';
+import type { FoodItem, AnalyzedDish } from '../types';
 
 // Use a singleton pattern to lazy-initialize the AI client.
 // This prevents the app from crashing on load if the API key is not yet available
@@ -48,8 +48,21 @@ const foodItemSchema = {
     required: ["name", "calories", "protein", "carbs", "fat", "grams"],
 };
 
+const dishSchema = {
+    type: Type.OBJECT,
+    properties: {
+        dishName: { type: Type.STRING, description: "Name of the overall dish in Spanish (e.g., 'Lentejas con chorizo')." },
+        ingredients: {
+            type: Type.ARRAY,
+            description: "An array of the main ingredients found in the dish.",
+            items: foodItemSchema,
+        },
+    },
+    required: ["dishName", "ingredients"],
+};
 
-export const analyzeFoodImage = async (imageFile: File): Promise<Omit<FoodItem, 'id'>[]> => {
+
+export const analyzeFoodImage = async (imageFile: File): Promise<AnalyzedDish[]> => {
     try {
         const imagePart = await fileToGenerativePart(imageFile);
         const generativeAi = getAiClient();
@@ -58,7 +71,7 @@ export const analyzeFoodImage = async (imageFile: File): Promise<Omit<FoodItem, 
             model: 'gemini-2.5-flash',
             contents: {
                 parts: [
-                    { text: "Analyze the food in this image. Identify each distinct food item and estimate its nutritional information (calories, protein, carbs, fat) and its estimated weight in grams. Return the data as a JSON array of objects. If there are multiple items, return an array with an object for each. For example, if you see a banana and an apple, return two separate objects in the array. IMPORTANT: The name of the food should be in Spanish." },
+                    { text: "Analyze the food in this image. First, identify each distinct dish (e.g., 'Chicken with rice'). For each dish, provide a name and a list of its main ingredients. For each ingredient, estimate its nutritional information (calories, protein, carbs, fat) and its weight in grams. Return the data as a JSON array of dish objects. IMPORTANT: All names should be in Spanish." },
                     imagePart
                 ]
             },
@@ -66,7 +79,7 @@ export const analyzeFoodImage = async (imageFile: File): Promise<Omit<FoodItem, 
                 responseMimeType: "application/json",
                 responseSchema: {
                     type: Type.ARRAY,
-                    items: foodItemSchema,
+                    items: dishSchema,
                 },
             },
         });
@@ -74,7 +87,7 @@ export const analyzeFoodImage = async (imageFile: File): Promise<Omit<FoodItem, 
         const jsonText = response.text.trim();
         const data = JSON.parse(jsonText);
 
-        return data as Omit<FoodItem, 'id'>[];
+        return data as AnalyzedDish[];
 
     } catch (error) {
         console.error("Error analyzing food image:", error);
@@ -82,6 +95,33 @@ export const analyzeFoodImage = async (imageFile: File): Promise<Omit<FoodItem, 
              throw new Error("La clave de API no es válida o no está configurada. Verifica la configuración en Netlify.");
         }
         throw new Error("No se pudo analizar la imagen con la IA. Inténtalo de nuevo.");
+    }
+};
+
+export const analyzeFoodDescription = async (description: string): Promise<AnalyzedDish[]> => {
+    try {
+        const generativeAi = getAiClient();
+        const response = await generativeAi.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: `Analyze the following food description: "${description}". Identify each distinct dish or food item. For each one, provide a name and a list of its main ingredients (if applicable, otherwise the item itself is the ingredient). For each ingredient, estimate its nutritional information (calories, protein, carbs, fat) and its weight in grams. Return the data as a JSON array of dish objects. IMPORTANT: All names should be in Spanish.`,
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: {
+                    type: Type.ARRAY,
+                    items: dishSchema,
+                },
+            },
+        });
+
+        const jsonText = response.text.trim();
+        return JSON.parse(jsonText) as AnalyzedDish[];
+
+    } catch (error) {
+        console.error("Error analyzing food description:", error);
+        if (error instanceof Error && (error.message.includes('API key') || error.message.includes('API_KEY') || error.message.includes('permission'))) {
+             throw new Error("La clave de API no es válida o no está configurada. Verifica la configuración en Netlify.");
+        }
+        throw new Error("No se pudo analizar la descripción con la IA. Inténtalo de nuevo.");
     }
 };
 
