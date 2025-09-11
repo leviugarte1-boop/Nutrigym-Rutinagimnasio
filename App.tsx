@@ -48,44 +48,53 @@ const App: React.FC = () => {
     return {};
   });
 
-  // Supabase Auth Effect
+  // Supabase Auth Effect with persistent caching for faster load times
   useEffect(() => {
     if (!supabase) {
         setIsAuthLoading(false);
         return;
     }
 
-    const checkUser = async () => {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session) {
+    const CACHE_KEY = 'nutrigym_profile_active';
+
+    const { data: authListener } = supabase.auth.onAuthStateChange(async (_event, session) => {
+        if (!session) {
+            localStorage.removeItem(CACHE_KEY);
+            setSession(null);
+            setIsAuthLoading(false);
+            return;
+        }
+
+        // Fast path: Check for the persistent "active" flag in localStorage.
+        const isProfileActiveCached = localStorage.getItem(CACHE_KEY) === 'true';
+
+        if (isProfileActiveCached) {
+            // User has successfully logged in before and hasn't logged out.
+            // Trust the cache and load the app immediately.
+            setSession(session);
+            setIsAuthLoading(false);
+            return;
+        }
+
+        // Slow path: No valid cache, must verify with the database.
+        // This runs on the very first login after clearing storage.
+        try {
             const { data, error } = await supabase.from('profiles').select('activo').eq('id', session.user.id).single();
+            
             if (error || !data || data.activo !== true) {
+                // If verification fails, sign out and ensure cache is clear.
                 await supabase.auth.signOut();
-                setSession(null);
+                localStorage.removeItem(CACHE_KEY);
             } else {
+                // Verification successful. Set the session and cache the active status persistently.
                 setSession(session);
+                localStorage.setItem(CACHE_KEY, 'true');
+                setIsAuthLoading(false);
             }
-        } else {
-            setSession(null);
+        } catch (e) {
+            // On any other error, sign out. The `!session` block above will handle clearing the cache.
+            await supabase.auth.signOut();
         }
-        setIsAuthLoading(false);
-    };
-
-    checkUser();
-
-    const { data: authListener } = supabase.auth.onAuthStateChange(async (_event, newSession) => {
-        if (newSession) {
-             const { data, error } = await supabase.from('profiles').select('activo').eq('id', newSession.user.id).single();
-             if (error || !data || data.activo !== true) {
-                await supabase.auth.signOut();
-                setSession(null);
-             } else {
-                setSession(newSession);
-             }
-        } else {
-            setSession(null);
-        }
-        setIsAuthLoading(false);
     });
 
     return () => {
@@ -177,6 +186,13 @@ const App: React.FC = () => {
       ...updatedProfile,
     }));
   }, []);
+
+  const handleSignOut = async () => {
+    if (supabase) {
+      localStorage.removeItem('nutrigym_profile_active');
+      await supabase.auth.signOut();
+    }
+  };
   
   // New conditional rendering logic
   if (isAuthLoading) {
@@ -199,7 +215,7 @@ const App: React.FC = () => {
           <h1 className="text-3xl font-bold tracking-tight text-center flex-grow">Nutrigym</h1>
           {supabase && (
             <button
-                onClick={() => supabase.auth.signOut()}
+                onClick={handleSignOut}
                 className="text-xs bg-white/20 hover:bg-white/30 text-white font-bold py-1 px-3 rounded-full transition-colors"
             >
                 Salir
